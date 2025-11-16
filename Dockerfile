@@ -22,10 +22,11 @@ COPY pyproject.toml uv.lock ./
 # Install dependencies using uv (creates .venv automatically)
 RUN uv sync --frozen --no-dev
 
-# Copy application code
+# Copy application code and configuration
 COPY main.py ./
 COPY utils/ ./utils/
 COPY prompt_registry/ ./prompt_registry/
+COPY .streamlit/ ./.streamlit/
 
 # Expose Streamlit port
 EXPOSE 8501
