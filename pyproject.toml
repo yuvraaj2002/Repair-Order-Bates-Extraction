@@ -5,11 +5,15 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "ipykernel>=7.1.0",
     "mistralai>=1.9.11",
     "openai>=2.8.0",
     "pymupdf>=1.26.6",
+    "pymupdf-layout>=1.26.6",
+    "pymupdf4llm>=0.2.0",
     "python-dotenv>=1.2.1",
     "rich>=14.2.0",
     "streamlit>=1.51.0",
     "tenacity>=9.1.2",
+    "openpyxl>=3.1.0",
 ]

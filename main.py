@@ -5,6 +5,7 @@ import io
 from datetime import datetime
 from utils.ocr_utils import PdfProcessor
 from utils.llm_utils import LLMService
+from utils.extraction_utils import PDFTextExtractor
 
 # ------------------- Page Configuration ------------------- #
 st.set_page_config(
@@ -32,10 +33,12 @@ def init_service(service_cls, name: str):
 
 pdf_service = init_service(PdfProcessor, "PdfProcessor")
 llm_service = init_service(LLMService, "LLMService")
+extraction_service = init_service(PDFTextExtractor, "PDFTextExtractor")
 
 # ------------------- Session State Initialization ------------------- #
 if 'processing_stage' not in st.session_state:
-    st.session_state.processing_stage = 1  # 1=Upload, 2=Processing, 3=Complete
+    # 1 = Upload, 2 = Document Type Identification, 3 = Custom Processing Pipeline, 4 = Extraction & Export
+    st.session_state.processing_stage = 1
 if 'extraction_complete' not in st.session_state:
     st.session_state.extraction_complete = False
 if 'extraction_results' not in st.session_state:
@@ -277,7 +280,24 @@ def inject_custom_css():
             
             /* Sidebar Styling */
             .css-1d391kg, [data-testid="stSidebar"] {
-                background: linear-gradient(180deg, #f8f9fa 0%, #ffffff 100%);
+                background: linear-gradient(180deg, #0f172a 0%, #1C2D4A 60%, #111827 100%);
+                color: #e5e7eb;
+            }
+
+            [data-testid="stSidebar"] * {
+                color: #e5e7eb !important;
+            }
+
+            [data-testid="stSidebar"] hr {
+                border-color: #1f2937 !important;
+            }
+
+            [data-testid="stSidebar"] .stRadio label {
+                color: #e5e7eb !important;
+            }
+
+            [data-testid="stSidebar"] .stRadio div[role="radiogroup"] > label {
+                background: transparent !important;
             }
             
             /* Status Messages */
@@ -340,32 +360,22 @@ def config_sidebar():
         )
         
         st.markdown("---")
-        st.markdown("**Processing Options**")
-        chunk_size = st.slider(
-            "Pages per chunk:",
-            min_value=10,
-            max_value=100,
-            value=50,
-            step=10,
-            help="Number of pages to process in each batch"
-        )
-        
-        st.markdown("---")
         st.markdown("**About**")
         st.info(
             "This tool uses advanced OCR and AI to extract Repair Orders and Bates Numbers from legal documents with high accuracy."
         )
         
-    logger.info(f"User selected output format: {output_format}, chunk size: {chunk_size}")
-    return output_format, chunk_size
+    logger.info(f"User selected output format: {output_format}")
+    return output_format
 
-output_format, chunk_size = config_sidebar()
+output_format = config_sidebar()
 
 # ------------------- Step Indicator Component ------------------- #
 def render_step_indicator(current_stage):
     step1_class = "complete" if current_stage > 1 else ("active" if current_stage == 1 else "")
     step2_class = "complete" if current_stage > 2 else ("active" if current_stage == 2 else "")
-    step3_class = "active" if current_stage == 3 else ""
+    step3_class = "complete" if current_stage > 3 else ("active" if current_stage == 3 else "")
+    step4_class = "active" if current_stage == 4 else ""
     
     st.markdown(
         f"""
@@ -377,12 +387,17 @@ def render_step_indicator(current_stage):
             <div class="step-arrow">→</div>
             <div class="step {step2_class}">
                 <span style="margin-right: 8px;">🔍</span>
-                Step 2 — OCR Processing
+                Step 2 — Detect Document Type
             </div>
             <div class="step-arrow">→</div>
             <div class="step {step3_class}">
+                <span style="margin-right: 8px;">🧩</span>
+                Step 3 — Run Processing Pipeline
+            </div>
+            <div class="step-arrow">→</div>
+            <div class="step {step4_class}">
                 <span style="margin-right: 8px;">📊</span>
-                Step 3 — Extraction & Export
+                Step 4 — Export Results & Summary
             </div>
         </div>
         """,
@@ -392,7 +407,7 @@ def render_step_indicator(current_stage):
 # ------------------- Header Component ------------------- #
 def render_header():
     st.markdown(
-        """
+    """
         <div class="main-header">
             <div class="main-title">⚖️ Repair Order & Bates Extraction Console</div>
             <div class="main-subtitle">
@@ -480,15 +495,16 @@ def render_processing_section():
     st.markdown(
         """
         <p style="color: #5F6C7B; margin-bottom: 20px;">
-            Click the button below to start the OCR engine. The system will extract clean text, 
-            identify Repair Orders, and map them to Bates Numbers.
+            Click the button below to start the Processing engine. The system will automatically identify the document type,
+            run a custom processing pipeline for that document, extract Bates Numbers and Repair Order Numbers,
+            and then prepare an indexed sheet in the output format selected in the configuration panel on the left.
         </p>
         """,
         unsafe_allow_html=True
     )
     
     process_clicked = st.button(
-        "🚀 Process Document (Run OCR Engine)",
+        "🚀 Process Document",
         use_container_width=True,
         type="primary"
     )
@@ -497,134 +513,53 @@ def render_processing_section():
     return process_clicked
 
 # ------------------- PDF Processing Function ------------------- #
-def process_pdf(pdf_bytes, chunk_size_param):
+def process_pdf(pdf_bytes):
     try:
         # OCR Status
         st.markdown(
-            '<div class="status-processing">🔄 OCR engine started... Extracting text from PDF pages...</div>',
+            '<div class="status-processing">🔄 Analyzing the document type</div>',
             unsafe_allow_html=True
         )
-        
-        ocr_response_list = pdf_service.extract_text_from_pdf(pdf_bytes)
-        if not ocr_response_list:
-            logger.error("OCR processing returned no response.")
-            st.error("❌ OCR processing failed. Please try again.", icon="❌")
+
+        # Router TO BE IMPLEMENTED TO IDENTIFY THE DOCUMENT TYPE
+        # For now, we assume a text-based PDF that we process with the structured OCR logic.
+        extracted_res = extraction_service.is_text_based_pdf(pdf_bytes)
+
+        # Process per-page text to extract Bates Numbers and Repair Order Numbers
+        bate_dict, pages_with_issues = extraction_service.process_structured_ocr_pdf(extracted_res)
+        if not bate_dict:
+            logger.error("Processing returned no response dictionary.")
+            st.error("❌ Processing failed. Please try again.", icon="❌")
             return None
 
-        logger.info(f"OCR processing completed successfully. Total pages: {len(ocr_response_list)}")
+        logger.info("Processing completed successfully.")
         st.markdown(
-            '<div class="status-success">✅ OCR text extraction complete!</div>',
-            unsafe_allow_html=True
-        )
-        
-        # Chunking Status
-        CHUNK_SIZE = chunk_size_param
-        total_pages = len(ocr_response_list)
-        num_chunks = (total_pages + CHUNK_SIZE - 1) // CHUNK_SIZE
-        logger.info(f"Creating {num_chunks} chunks of {CHUNK_SIZE} pages each from {total_pages} total pages")
-        
-        st.markdown(
-            f'<div class="status-processing">📦 Preparing {num_chunks} chunks for AI analysis...</div>',
+            '<div class="status-success">✅ Processing complete!</div>',
             unsafe_allow_html=True
         )
 
-        # Load the markdown prompt template
-        prompt_path = "prompt_registry/document_analysis_propmt.md"
-        try:
-            prompt_template = pdf_service.load_markdown_file(prompt_path)
-            logger.info(f"Loaded prompt template from {prompt_path}")
-        except Exception as e:
-            logger.error(f"Failed to load prompt template: {str(e)}", exc_info=True)
-            st.error(f"❌ Failed to load prompt template: {str(e)}")
-            prompt_template = None
-
-        # Chunk processing
-        chunk_results = []
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-
-        for chunk_idx in range(num_chunks):
-            start_idx = chunk_idx * CHUNK_SIZE
-            end_idx = min(start_idx + CHUNK_SIZE, total_pages)
-            progress = (chunk_idx + 1) / num_chunks
-            progress_bar.progress(progress)
-            status_text.markdown(
-                f'<div class="status-processing">🔍 Analyzing chunk {chunk_idx + 1}/{num_chunks} (Pages {start_idx + 1}-{end_idx})...</div>',
-                unsafe_allow_html=True
-            )
-
-            chunk_pages = ocr_response_list[start_idx:end_idx]
-            combined_markdown = "\n\n".join(chunk_pages)
-            logger.info(f"Chunk {chunk_idx + 1}/{num_chunks}: Pages {start_idx + 1}-{end_idx} combined into markdown ({len(combined_markdown)} chars)")
-
-            if prompt_template and "{ocr_text}" in prompt_template:
-                final_prompt = prompt_template.replace("{ocr_text}", combined_markdown)
-            else:
-                final_prompt = f"# OCR TEXT DATA (Pages {start_idx + 1}-{end_idx})\n\n{combined_markdown}"
-
-            chunk_results.append({
-                'chunk_number': chunk_idx + 1,
-                'start_page': start_idx + 1,
-                'end_page': end_idx,
-                'combined_markdown': combined_markdown,
-                'final_prompt': final_prompt,
-            })
-
-        progress_bar.empty()
-        status_text.empty()
-        st.session_state.ocr_chunks = chunk_results
-        logger.info(f"Stored {len(chunk_results)} chunks in session state")
-
-        # AI Processing Status
-        st.markdown(
-            '<div class="status-processing">🤖 Sending to AI for Repair Order & Bates extraction...</div>',
-            unsafe_allow_html=True
+        # Formatting the data as per the Excel or CSV output
+        formatted_data, export_bytes = extraction_service.format_data_for_excel_or_csv(
+            bate_dict, output_format
         )
 
-        # Making calls to OpenAI
-        llm_responses_list = []
-        ai_progress = st.progress(0)
-        ai_status = st.empty()
-        
-        for idx, chunk in enumerate(chunk_results):
-            ai_progress.progress((idx + 1) / len(chunk_results))
-            ai_status.markdown(
-                f'<div class="status-processing">🧠 AI processing chunk {idx + 1}/{len(chunk_results)}...</div>',
-                unsafe_allow_html=True
-            )
-            
-            response = llm_service.process_document_extraction(chunk['final_prompt'])
-            if response:
-                llm_responses_list.append(response)
-            else:
-                logger.error("No response from AI for chunk.")
-                llm_responses_list.append(None)
+        # Build a results object compatible with the summary & download panels
+        total_pages = extracted_res.get("Total pages", 0)
+        responses = formatted_data  # list of row dicts
 
-        ai_progress.empty()
-        ai_status.empty()
+        st.session_state.extraction_results = {
+            "total_pages": total_pages,
+            "num_chunks": 1,  # single-pass processing for now
+            "responses": responses,
+            "pages_with_issues": pages_with_issues,
+            "export_bytes": export_bytes,
+            "export_format": output_format,
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        st.session_state.extraction_complete = True
+        st.session_state.processing_stage = 4
 
-        if llm_responses_list:
-            logger.info(f"Successfully processed {len(llm_responses_list)} chunks with AI.")
-            st.markdown(
-                '<div class="status-success">✅ Extraction complete! Data ready for download.</div>',
-                unsafe_allow_html=True
-            )
-            
-            # Store results in session state
-            st.session_state.extraction_results = {
-                'responses': llm_responses_list,
-                'total_pages': total_pages,
-                'num_chunks': num_chunks,
-                'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            }
-            st.session_state.extraction_complete = True
-            st.session_state.processing_stage = 3
-            
-            return llm_responses_list
-        else:
-            logger.error("No response from AI.")
-            st.error("❌ No response from AI. Please check the logs.", icon="❌")
-            return None
+        return formatted_data
 
     except Exception as e:
         logger.error(f"Error processing PDF: {str(e)}", exc_info=True)
@@ -643,13 +578,36 @@ def render_extraction_summary():
     )
     
     results = st.session_state.extraction_results
-    
-    # Calculate metrics (you can enhance this based on actual response structure)
-    total_pages = results['total_pages']
-    num_chunks = results['num_chunks']
-    repair_orders_found = len(results['responses']) * 5  # Placeholder - adjust based on actual data
-    bates_found = total_pages  # Placeholder
-    accuracy = 95.8  # Placeholder
+    responses = results.get("responses", [])
+
+    # Calculate metrics based on structured extraction results
+    total_pages = results.get("total_pages", 0)
+    num_chunks = results.get("num_chunks", 1)
+
+    # Count repair orders (non-empty repair_order_number values)
+    repair_orders_found = sum(
+        1 for row in responses
+        if str(row.get("repair_order_number", "")).strip()
+    )
+
+    # Count unique Bates Numbers
+    bates_numbers = {
+        row.get("bate_number")
+        for row in responses
+        if row.get("bate_number")
+    }
+    bates_found = len(bates_numbers)
+
+    # Errors = pages where Bates numbers were missing/ambiguous
+    errors_detected = len(results.get("pages_with_issues", []))
+
+    # Estimated accuracy: based on alignment between total pages and Bates Numbers
+    # If every page has exactly one Bates Number, accuracy = 100%.
+    if total_pages > 0:
+        missing_or_extra = abs(total_pages - bates_found)
+        accuracy = max(0.0, 100.0 * (1.0 - missing_or_extra / total_pages))
+    else:
+        accuracy = 0.0
     
     # Display metrics in 2 rows
     col1, col2, col3 = st.columns(3)
@@ -662,7 +620,7 @@ def render_extraction_summary():
     
     col4, col5, col6 = st.columns(3)
     with col4:
-        st.metric("⚠️ Errors Detected", "0")
+        st.metric("⚠️ Errors Detected", f"{errors_detected}")
     with col5:
         st.metric("✅ Estimated Accuracy", f"{accuracy}%")
     with col6:
@@ -682,17 +640,27 @@ def render_download_section():
     )
     
     results = st.session_state.extraction_results
+    responses = results.get("responses", [])
+    export_bytes = results.get("export_bytes", b"")
+    export_format = results.get("export_format", "Excel")
+
+    # Choose filename and mime based on export format
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    if export_bytes and export_format == "CSV":
+        index_filename = f"extraction_results_{timestamp}.csv"
+        index_mime = "text/csv"
+    else:
+        index_filename = f"extraction_results_{timestamp}.xlsx"
+        index_mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        # Generate Excel download (placeholder - implement based on your data structure)
-        excel_data = json.dumps(results['responses'], indent=2).encode('utf-8')
         st.download_button(
-            label="📊 Download Excel Index",
-            data=excel_data,
-            file_name=f"extraction_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            label="📊 Download Index Sheet",
+            data=export_bytes,
+            file_name=index_filename,
+            mime=index_mime,
             use_container_width=True
         )
     
@@ -762,9 +730,9 @@ if pdf_uploaded:
         logger.info("User pressed process button. Starting OCR pipeline...")
         st.session_state.processing_stage = 2
         
-        llm_responses = process_pdf(st.session_state.pdf_bytes, chunk_size)
+        formatted_data = process_pdf(st.session_state.pdf_bytes)
         
-        if llm_responses:
+        if formatted_data:
             logger.info(f"Successfully processed document.")
             st.balloons()
 

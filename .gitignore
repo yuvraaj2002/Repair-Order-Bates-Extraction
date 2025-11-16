@@ -196,3 +196,5 @@ uv.lock.bak
 *.pyo
 *.pyd
 
+# Adding the testing folder
+testing/
