@@ -1,747 +1,606 @@
 import streamlit as st
 import logging
 import json
-import io
+import pandas as pd
 from datetime import datetime
 from utils.ocr_utils import PdfProcessor
 from utils.llm_utils import LLMService
-from utils.extraction_utils import PDFTextExtractor
+from utils.extraction_utils import DocumentExtractor
 
-# ------------------- Page Configuration ------------------- #
-st.set_page_config(
-    page_title="Legal OCR Console - Bates & RO Extraction",
-    page_icon="⚖️",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# ------------------- Configuration ------------------- #
+class AppConfig:
+    PAGE_CONFIG = {
+        "page_title": "Legal OCR Console - Bates & RO Extraction",
+        "page_icon": "⚖️",
+        "layout": "wide",
+        "initial_sidebar_state": "expanded"
+    }
+    
+    DOCUMENT_TYPES = {
+        "PDF": "PDF File (Extracted or Already OCR)",
+        "TEXT": "Text File"
+    }
 
-# ------------------- Logging Setup ------------------- #
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-logger.info("Starting Streamlit app...")
+# ------------------- Service Manager ------------------- #
+class ServiceManager:
+    @staticmethod
+    def init_service(service_cls, name: str):
+        try:
+            service = service_cls()
+            logging.info(f"{name} initialized successfully.")
+            return service
+        except Exception as e:
+            logging.error(f"Failed to initialize {name}: {str(e)}", exc_info=True)
+            st.error(f"Failed to initialize {name} service. Check logs.")
+            st.stop()
 
-# ------------------- Service Initialization ------------------- #
-def init_service(service_cls, name: str):
-    try:
-        service = service_cls()
-        logger.info(f"{name} initialized successfully.")
-        return service
-    except Exception as e:
-        logger.error(f"Failed to initialize {name}: {str(e)}", exc_info=True)
-        st.error(f"Failed to initialize {name} service. Check logs.")
-        st.stop()
+# ------------------- Session State Manager ------------------- #
+class SessionManager:
+    @staticmethod
+    def initialize():
+        defaults = {
+            'processing_stage': 1,
+            'extraction_complete': False,
+            'extraction_results': None,
+            'document_type': None,
+            'document_bytes': None,
+            'document_filename': None
+        }
+        for key, value in defaults.items():
+            if key not in st.session_state:
+                st.session_state[key] = value
 
-pdf_service = init_service(PdfProcessor, "PdfProcessor")
-llm_service = init_service(LLMService, "LLMService")
-extraction_service = init_service(PDFTextExtractor, "PDFTextExtractor")
-
-# ------------------- Session State Initialization ------------------- #
-if 'processing_stage' not in st.session_state:
-    # 1 = Upload, 2 = Document Type Identification, 3 = Custom Processing Pipeline, 4 = Extraction & Export
-    st.session_state.processing_stage = 1
-if 'extraction_complete' not in st.session_state:
-    st.session_state.extraction_complete = False
-if 'extraction_results' not in st.session_state:
-    st.session_state.extraction_results = None
-
-# ------------------- Custom CSS ------------------- #
-def inject_custom_css():
-    st.markdown(
-        """
+# ------------------- UI Components ------------------- #
+class UIComponents:
+    @staticmethod
+    def inject_custom_css():
+        st.markdown("""
         <style>
-            /* Import Professional Font */
-            @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-            
-            /* Global Styles */
-            * {
-                font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-            }
-            
-            /* Main Container */
-            .block-container {
-                padding-top: 2rem;
-                padding-bottom: 3rem;
-                max-width: 1200px;
-            }
-            
-            /* Card Component */
-            .card {
-                background: #ffffff;
-                padding: 30px;
-                border-radius: 12px;
-                box-shadow: 0 2px 10px rgba(0,0,0,0.06);
-                margin-bottom: 25px;
-                border: 1px solid #e8eaed;
-            }
-            
-            /* Header Styles */
-            .main-header {
-                text-align: center;
-                padding: 30px 0 20px 0;
-                margin-bottom: 35px;
-            }
-            
-            .main-title {
-                font-size: 2.5rem;
-                font-weight: 700;
-                color: #1C2D4A;
-                margin-bottom: 10px;
-                letter-spacing: -0.5px;
-            }
-            
-            .main-subtitle {
-                font-size: 1.1rem;
-                color: #5F6C7B;
-                line-height: 1.6;
-                max-width: 900px;
-                margin: 0 auto;
-                font-weight: 400;
-            }
-            
-            /* Step Indicator */
-            .step-indicator {
-                display: flex;
-                justify-content: center;
-                align-items: center;
-                margin: 35px 0;
-                padding: 25px;
-                background: #f8f9fa;
-                border-radius: 12px;
-            }
-            
-            .step {
-                display: flex;
-                align-items: center;
-                padding: 12px 20px;
-                background: #e8eaed;
-                color: #5F6C7B;
-                border-radius: 8px;
-                font-weight: 500;
-                font-size: 0.95rem;
-                transition: all 0.3s ease;
-            }
-            
-            .step.active {
-                background: #1C2D4A;
-                color: white;
-                box-shadow: 0 4px 12px rgba(28, 45, 74, 0.2);
-            }
-            
-            .step.complete {
-                background: #DAF5DB;
-                color: #1e7e34;
-            }
-            
-            .step-arrow {
-                margin: 0 15px;
-                color: #9ca3af;
-                font-size: 1.2rem;
-            }
-            
-            /* Upload Zone */
-            .upload-zone {
-                text-align: center;
-                padding: 50px 30px;
-                background: linear-gradient(135deg, #f8f9fa 0%, #ffffff 100%);
-                border: 2px dashed #cbd5e0;
-                border-radius: 12px;
-                transition: all 0.3s ease;
-            }
-            
-            .upload-zone:hover {
-                border-color: #1C2D4A;
-                background: #ffffff;
-            }
-            
-            .upload-icon {
-                font-size: 3rem;
-                margin-bottom: 15px;
-                color: #5F6C7B;
-            }
-            
-            /* Success Message */
-            .success-badge {
-                display: inline-flex;
-                align-items: center;
-                padding: 10px 20px;
-                background: #DAF5DB;
-                color: #1e7e34;
-                border-radius: 8px;
-                font-weight: 500;
-                margin: 15px 0;
-            }
-            
-            /* Info Message */
-            .info-badge {
-                display: inline-flex;
-                align-items: center;
-                padding: 10px 20px;
-                background: #DDEBFF;
-                color: #004085;
-                border-radius: 8px;
-                font-weight: 500;
-                margin: 15px 0;
-            }
-            
-            /* Section Headers */
-            .section-header {
-                font-size: 1.4rem;
-                font-weight: 600;
-                color: #1C2D4A;
-                margin-bottom: 15px;
-                display: flex;
-                align-items: center;
-            }
-            
-            .section-icon {
-                margin-right: 10px;
-                font-size: 1.5rem;
-            }
-            
-            /* Metrics Grid */
-            div[data-testid="metric-container"] {
-                background: linear-gradient(135deg, #f8f9fa 0%, #ffffff 100%);
-                border: 1px solid #e8eaed;
-                padding: 20px;
-                border-radius: 10px;
-                box-shadow: 0 2px 8px rgba(0,0,0,0.04);
-            }
-            
-            div[data-testid="metric-container"] > label {
-                color: #5F6C7B !important;
-                font-weight: 500 !important;
-                font-size: 0.9rem !important;
-            }
-            
-            div[data-testid="metric-container"] > div {
-                color: #1C2D4A !important;
-                font-weight: 700 !important;
-                font-size: 2rem !important;
-            }
-            
-            /* Buttons */
-            .stButton > button {
-                background: linear-gradient(135deg, #1C2D4A 0%, #2d4a6e 100%);
-                color: white;
-                border: none;
-                padding: 15px 30px;
-                font-size: 1.05rem;
-                font-weight: 600;
-                border-radius: 10px;
-                transition: all 0.3s ease;
-                box-shadow: 0 4px 12px rgba(28, 45, 74, 0.2);
-            }
-            
-            .stButton > button:hover {
-                background: linear-gradient(135deg, #0f1c2e 0%, #1C2D4A 100%);
-                box-shadow: 0 6px 16px rgba(28, 45, 74, 0.3);
-                transform: translateY(-2px);
-            }
-            
-            .stDownloadButton > button {
-                background: white;
-                color: #1C2D4A;
-                border: 2px solid #1C2D4A;
-                padding: 12px 24px;
-                font-size: 0.95rem;
-                font-weight: 600;
-                border-radius: 8px;
-                transition: all 0.3s ease;
-            }
-            
-            .stDownloadButton > button:hover {
-                background: #1C2D4A;
-                color: white;
-            }
-            
-            /* Progress Bar */
-            .stProgress > div > div {
-                background-color: #1C2D4A;
-            }
-            
-            /* Expander */
-            .streamlit-expanderHeader {
-                font-weight: 600;
-                color: #1C2D4A;
-                background: #f8f9fa;
-                border-radius: 8px;
-                padding: 12px;
-            }
-            
-            /* Footer */
-            .footer {
-                text-align: center;
-                padding: 30px 0 10px 0;
-                margin-top: 50px;
-                border-top: 1px solid #e8eaed;
-                color: #9ca3af;
-                font-size: 0.9rem;
-            }
-            
-            /* Sidebar Styling */
-            .css-1d391kg, [data-testid="stSidebar"] {
-                background: linear-gradient(180deg, #0f172a 0%, #1C2D4A 60%, #111827 100%);
-                color: #e5e7eb;
-            }
-
-            [data-testid="stSidebar"] * {
-                color: #e5e7eb !important;
-            }
-
-            [data-testid="stSidebar"] hr {
-                border-color: #1f2937 !important;
-            }
-
-            [data-testid="stSidebar"] .stRadio label {
-                color: #e5e7eb !important;
-            }
-
-            [data-testid="stSidebar"] .stRadio div[role="radiogroup"] > label {
-                background: transparent !important;
-            }
-            
-            /* Status Messages */
-            .status-processing {
-                padding: 15px;
-                background: #FFF3CD;
-                border-left: 4px solid #FFC107;
-                border-radius: 6px;
-                margin: 10px 0;
-                font-weight: 500;
-            }
-            
-            .status-success {
-                padding: 15px;
-                background: #DAF5DB;
-                border-left: 4px solid #28a745;
-                border-radius: 6px;
-                margin: 10px 0;
-                font-weight: 500;
-            }
-            
-            /* File Badge */
-            .file-badge {
-                display: inline-flex;
-                align-items: center;
-                padding: 12px 20px;
-                background: #DDEBFF;
-                border-radius: 8px;
-                margin: 10px 0;
-                font-weight: 500;
-                color: #004085;
-            }
-            
-            /* Recommendation Text */
-            .recommendation {
-                font-size: 0.9rem;
-                color: #6c757d;
-                font-style: italic;
-                margin-top: 10px;
-            }
+                @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+                * { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+                .block-container { padding-top: 2rem; padding-bottom: 3rem; max-width: 1200px; }
+                .card { background: #ffffff; padding: 30px; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.06); margin-bottom: 25px; border: 1px solid #e8eaed; }
+                .main-header { text-align: center; padding: 30px 0 20px 0; margin-bottom: 35px; }
+                .main-title { font-size: 2.5rem; font-weight: 700; color: #1C2D4A; margin-bottom: 10px; letter-spacing: -0.5px; }
+                .main-subtitle { font-size: 1.1rem; color: #5F6C7B; line-height: 1.6; max-width: 900px; margin: 0 auto; font-weight: 400; }
+                .step-indicator { display: flex; justify-content: center; align-items: center; margin: 35px 0; padding: 25px; background: #f8f9fa; border-radius: 12px; }
+                .step { display: flex; align-items: center; padding: 12px 20px; background: #e8eaed; color: #5F6C7B; border-radius: 8px; font-weight: 500; font-size: 0.95rem; transition: all 0.3s ease; }
+                .step.active { background: #1C2D4A; color: white; box-shadow: 0 4px 12px rgba(28, 45, 74, 0.2); }
+                .step.complete { background: #DAF5DB; color: #1e7e34; }
+                .step-arrow { margin: 0 15px; color: #9ca3af; font-size: 1.2rem; }
+                .upload-zone { text-align: center; padding: 50px 30px; background: linear-gradient(135deg, #f8f9fa 0%, #ffffff 100%); border: 2px dashed #cbd5e0; border-radius: 12px; transition: all 0.3s ease; }
+                .upload-zone:hover { border-color: #1C2D4A; background: #ffffff; }
+                .success-badge, .info-badge, .file-badge { display: inline-flex; align-items: center; padding: 10px 20px; border-radius: 8px; font-weight: 500; margin: 15px 0; }
+                .success-badge { background: #DAF5DB; color: #1e7e34; }
+                .info-badge { background: #DDEBFF; color: #004085; }
+                .file-badge { background: #DDEBFF; color: #004085; }
+                .section-header { font-size: 1.4rem; font-weight: 600; color: #1C2D4A; margin-bottom: 15px; display: flex; align-items: center; }
+                .stButton > button { background: linear-gradient(135deg, #1C2D4A 0%, #2d4a6e 100%); color: white; border: none; padding: 15px 30px; font-size: 1.05rem; font-weight: 600; border-radius: 10px; transition: all 0.3s ease; }
+                .status-processing { padding: 15px; background: #FFF3CD; border-left: 4px solid #FFC107; border-radius: 6px; margin: 10px 0; font-weight: 500; }
+                .status-success { padding: 15px; background: #DAF5DB; border-left: 4px solid #28a745; border-radius: 6px; margin: 10px 0; font-weight: 500; }
+                .footer { text-align: center; padding: 30px 0 10px 0; margin-top: 50px; border-top: 1px solid #e8eaed; color: #9ca3af; font-size: 0.9rem; }
         </style>
-        """, 
-        unsafe_allow_html=True
-    )
-    logger.debug("Custom CSS injected.")
+        """, unsafe_allow_html=True)
 
-inject_custom_css()
+    @staticmethod
+    def render_header():
+        st.markdown("""
+            <div class="main-header">
+                <div class="main-title">⚖️ Repair Order & Bates Extraction Console</div>
+                <div class="main-subtitle">
+                    Upload Bates-stamped legal PDFs and automatically extract Repair Orders, Bates Numbers, 
+                    and Page Numbers using high-accuracy OCR. Download a structured Excel index ready for 
+                    legal briefs, discovery responses, and evidence mapping.
+                </div>
+            </div>
+        """, unsafe_allow_html=True)
 
-# ------------------- Sidebar Configuration ------------------- #
-def config_sidebar():
-    with st.sidebar:
-        st.markdown("### ⚙️ Configuration Panel")
-        st.markdown("---")
+    @staticmethod
+    def render_step_indicator(current_stage):
+        steps = [
+            ("📄", "Step 1 — Upload Document", 1),
+            ("🔍", "Step 2 — Analyze Document Type", 2),
+            ("🧩", "Step 3 — Run Processing Pipeline", 3),
+            ("📊", "Step 4 — Export Results & Summary", 4)
+        ]
         
-        st.markdown("**Output Format**")
-        output_format = st.radio(
-            "Select export format:",
-            ("Excel", "CSV"),
-            help="Choose how you want to download the extracted data"
-        )
+        step_html = []
+        for i, (icon, label, stage) in enumerate(steps):
+            if current_stage > stage:
+                css_class = "complete"
+            elif current_stage == stage:
+                css_class = "active"
+            else:
+                css_class = ""
+                
+            step_html.append(f'<div class="step {css_class}"><span style="margin-right: 8px;">{icon}</span>{label}</div>')
+            
+            # Add arrow between steps (not after the last one)
+            if i < len(steps) - 1:
+                step_html.append('<div class="step-arrow">→</div>')
         
-        st.markdown("---")
-        st.markdown("**About**")
-        st.info(
-            "This tool uses advanced OCR and AI to extract Repair Orders and Bates Numbers from legal documents with high accuracy."
-        )
-        
-    logger.info(f"User selected output format: {output_format}")
-    return output_format
+        st.markdown(f'<div class="step-indicator">{"".join(step_html)}</div>', unsafe_allow_html=True)
 
-output_format = config_sidebar()
+    @staticmethod
+    def render_footer():
+        st.markdown('<div class="footer">Built for Litigation Workflows — Bates Indexing Automation<br></div>', unsafe_allow_html=True)
 
-# ------------------- Step Indicator Component ------------------- #
-def render_step_indicator(current_stage):
-    step1_class = "complete" if current_stage > 1 else ("active" if current_stage == 1 else "")
-    step2_class = "complete" if current_stage > 2 else ("active" if current_stage == 2 else "")
-    step3_class = "complete" if current_stage > 3 else ("active" if current_stage == 3 else "")
-    step4_class = "active" if current_stage == 4 else ""
-    
-    st.markdown(
-        f"""
-        <div class="step-indicator">
-            <div class="step {step1_class}">
-                <span style="margin-right: 8px;">📄</span>
-                Step 1 — Upload PDF
-            </div>
-            <div class="step-arrow">→</div>
-            <div class="step {step2_class}">
-                <span style="margin-right: 8px;">🔍</span>
-                Step 2 — Detect Document Type
-            </div>
-            <div class="step-arrow">→</div>
-            <div class="step {step3_class}">
-                <span style="margin-right: 8px;">🧩</span>
-                Step 3 — Run Processing Pipeline
-            </div>
-            <div class="step-arrow">→</div>
-            <div class="step {step4_class}">
-                <span style="margin-right: 8px;">📊</span>
-                Step 4 — Export Results & Summary
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
+# ------------------- Section Renderers ------------------- #
+class SectionRenderer:
+    @staticmethod
+    def config_sidebar():
+        with st.sidebar:
+            st.markdown("### ⚙️ Configuration Panel")
+            st.markdown("---")
+            st.markdown("**Output Format**")
+            output_format = st.radio("Select export format:", ("Excel", "CSV"), help="Choose how you want to download the extracted data")
+            st.markdown("---")
+            
+        return output_format
 
-# ------------------- Header Component ------------------- #
-def render_header():
-    st.markdown(
-    """
-        <div class="main-header">
-            <div class="main-title">⚖️ Repair Order & Bates Extraction Console</div>
-            <div class="main-subtitle">
-                Upload Bates-stamped legal PDFs and automatically extract Repair Orders, Bates Numbers, 
-                and Page Numbers using high-accuracy OCR. Download a structured Excel index ready for 
-                legal briefs, discovery responses, and evidence mapping.
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-    logger.info("Displayed app header.")
+    @staticmethod
+    def render_upload_section():
+        with st.container():
+            st.markdown('<div class="card">', unsafe_allow_html=True)
+            st.markdown('<div class="section-header"><span class="section-icon">📁</span>Document Upload</div>', unsafe_allow_html=True)
+            
+            document_type = st.selectbox(
+                "Select Document Type:",
+                list(AppConfig.DOCUMENT_TYPES.values()),
+                index=0,
+                help="Select whether you're uploading a PDF file or a plain text file",
+                label_visibility="collapsed"
+            )
+            
+            st.session_state.document_type = document_type
+            
+            is_pdf = document_type == AppConfig.DOCUMENT_TYPES["PDF"]
+            accepted_types = ["pdf"] if is_pdf else ["txt"]
+            file_type_label = "PDF" if is_pdf else "Text"
+            recommendation = "✨ Recommended: Bates-stamped court-ready PDF documents" if is_pdf else "✨ Upload a plain text file (.txt) containing document content"
+            
+            st.markdown("<br>", unsafe_allow_html=True)
+            uploaded_file = st.file_uploader(f"Upload {file_type_label} File", type=accepted_types, help=recommendation, key="file_uploader")
+            
+            if uploaded_file:
+                logging.info(f"File uploaded: {uploaded_file.name}, type: {file_type_label}")
+                file_size_mb = uploaded_file.size / (1024 * 1024)
+                
+                st.markdown(f"""
+                    <div class="success-badge">✅ {file_type_label} File Uploaded Successfully</div>
+                    <div class="file-badge">📄 {uploaded_file.name} — {file_size_mb:.2f} MB</div>
+                """, unsafe_allow_html=True)
+                
+                # Check if this is a new file or document type change - clear old state if so
+                is_new_file = ('document_bytes' not in st.session_state or 
+                              st.session_state.get('document_filename') != uploaded_file.name)
+                is_document_type_change = (st.session_state.get('document_type') != document_type)
+                
+                if is_new_file or is_document_type_change:
+                    # Clear previous extraction results and processing state
+                    st.session_state.extraction_results = None
+                    st.session_state.extraction_complete = False
+                    st.session_state.processing_stage = 1
+                    
+                    logging.info(f"Cleared previous session state. Reason: {'New file' if is_new_file else 'Document type changed'}")
+                
+                # Store new file
+                uploaded_file.seek(0)
+                st.session_state.document_bytes = uploaded_file.read()
+                st.session_state.document_filename = uploaded_file.name
+                
+                logging.info(f"Stored {uploaded_file.name} in session_state with document type: {document_type}")
+                
+                st.markdown('</div>', unsafe_allow_html=True)
+                return True
+            
+            st.markdown('</div>', unsafe_allow_html=True)
+            return False
 
-# ------------------- Upload Section ------------------- #
-def render_upload_section():
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="section-header"><span class="section-icon">📁</span>Document Upload</div>',
-        unsafe_allow_html=True
-    )
-    
-    uploaded_file = st.file_uploader(
-        "Upload PDF File",
-        type=["pdf"],
-        help="Maximum file size: 200MB. Recommended: Bates-stamped court PDFs",
-        label_visibility="collapsed"
-    )
-    
-    if uploaded_file:
-        logger.info(f"File uploaded: {uploaded_file.name}, size: {uploaded_file.size} bytes")
-        
-        # Display success message
-        file_size_mb = uploaded_file.size / (1024 * 1024)
-        st.markdown(
-            f"""
-            <div class="success-badge">
-                ✅ PDF Uploaded Successfully
-            </div>
-            <div class="file-badge">
-                📄 {uploaded_file.name} — {file_size_mb:.2f} MB
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-        
-        # Store in session state
-        if (
-            'pdf_bytes' not in st.session_state 
-            or st.session_state.get('pdf_filename') != uploaded_file.name
-        ):
-            uploaded_file.seek(0)
-            st.session_state.pdf_bytes = uploaded_file.read()
-            st.session_state.pdf_filename = uploaded_file.name
-            st.session_state.processing_stage = 1
-            st.session_state.extraction_complete = False
-            logger.info(f"Stored {uploaded_file.name} in session_state.")
-        
-        st.markdown('</div>', unsafe_allow_html=True)
-        return True
-    else:
-        st.markdown(
-            """
-            <div class="upload-zone">
-                <div class="upload-icon">📤</div>
-                <h3 style="color: #1C2D4A; margin-bottom: 10px;">Drag and drop your PDF here</h3>
-                <p style="color: #5F6C7B; margin-bottom: 20px;">or click to browse</p>
-                <p class="recommendation">✨ Recommended: Bates-stamped court-ready PDF documents</p>
-                <p style="color: #9ca3af; font-size: 0.85rem; margin-top: 15px;">Maximum file size: 200MB</p>
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-        st.markdown('</div>', unsafe_allow_html=True)
-        logger.debug("Waiting for user to upload a PDF document.")
-        return False
+    @staticmethod
+    def render_processing_section():
+        with st.container():
+            st.markdown('<div class="card">', unsafe_allow_html=True)
+            st.markdown('<div class="section-header"><span class="section-icon">🚀</span>OCR Processing Engine</div>', unsafe_allow_html=True)
+            
+            st.markdown("""
+                <p style="color: #5F6C7B; margin-bottom: 20px;">
+                    Click the button below to start the Processing engine. The system will automatically identify the document type,
+                    run a custom processing pipeline for that document, extract Ba  tes Numbers and Repair Order Numbers,
+                    and then prepare an indexed sheet in the output format selected in the configuration panel on the left.
+                </p>
+            """, unsafe_allow_html=True)
+            
+            process_clicked = st.button("🚀 Process Document", width="stretch", type="primary")
+            st.markdown('</div>', unsafe_allow_html=True)
+            return process_clicked
 
-# ------------------- Processing Section ------------------- #
-def render_processing_section():
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="section-header"><span class="section-icon">🚀</span>OCR Processing Engine</div>',
-        unsafe_allow_html=True
-    )
-    
-    st.markdown(
-        """
-        <p style="color: #5F6C7B; margin-bottom: 20px;">
-            Click the button below to start the Processing engine. The system will automatically identify the document type,
-            run a custom processing pipeline for that document, extract Bates Numbers and Repair Order Numbers,
-            and then prepare an indexed sheet in the output format selected in the configuration panel on the left.
-        </p>
-        """,
-        unsafe_allow_html=True
-    )
-    
-    process_clicked = st.button(
-        "🚀 Process Document",
-        use_container_width=True,
-        type="primary"
-    )
-    
-    st.markdown('</div>', unsafe_allow_html=True)
-    return process_clicked
+    @staticmethod
+    def render_extraction_summary():
+        if not st.session_state.extraction_complete or not st.session_state.extraction_results:
+            return
 
-# ------------------- PDF Processing Function ------------------- #
-def process_pdf(pdf_bytes):
-    try:
-        # OCR Status
-        st.markdown(
-            '<div class="status-processing">🔄 Analyzing the document type</div>',
-            unsafe_allow_html=True
-        )
+        with st.container():
+            st.markdown('<div class="card">', unsafe_allow_html=True)
+            st.markdown('<div class="section-header"><span class="section-icon">📊</span>Extraction Summary</div>', unsafe_allow_html=True)
+            
+            results = st.session_state.extraction_results
+            responses = results.get("responses", [])
+            total_pages = results.get("total_pages", 0)
+            
+            repair_orders_found = sum(1 for row in responses if str(row.get("repair_order_number", "")).strip())
+            bates_numbers = {row.get("bate_number") for row in responses if row.get("bate_number")}
+            bates_found = len(bates_numbers)
+            errors_detected = len(results.get("pages_with_issues", []))
+            accuracy = max(0.0, 100.0 * (1.0 - abs(total_pages - bates_found) / total_pages)) if total_pages > 0 else 0.0
+            
+            metrics = [
+                ("📄 Total Pages Processed", f"{total_pages:,}"),
+                ("🔧 Repair Orders Extracted", f"{repair_orders_found:,}"),
+                ("📋 Bates Numbers Found", f"{bates_found:,}"),
+                ("⚠️ Errors Detected", f"{errors_detected}"),
+                ("✅ Estimated Accuracy", f"{accuracy}%"),
+                ("📦 Chunks Processed", f"{results.get('num_chunks', 1)}")
+            ]
+            
+            for i in range(0, len(metrics), 3):
+                cols = st.columns(3)
+                for col, (label, value) in zip(cols, metrics[i:i+3]):
+                    with col:
+                        st.metric(label, value)
+            
+            st.markdown('</div>', unsafe_allow_html=True)
 
-        # Router TO BE IMPLEMENTED TO IDENTIFY THE DOCUMENT TYPE
-        # For now, we assume a text-based PDF that we process with the structured OCR logic.
-        extracted_res = extraction_service.is_text_based_pdf(pdf_bytes)
+    @staticmethod
+    def render_download_section():
+        if not st.session_state.extraction_complete or not st.session_state.extraction_results:
+            return
 
-        # Process per-page text to extract Bates Numbers and Repair Order Numbers
-        bate_dict, pages_with_issues = extraction_service.process_structured_ocr_pdf(extracted_res)
-        if not bate_dict:
-            logger.error("Processing returned no response dictionary.")
-            st.error("❌ Processing failed. Please try again.", icon="❌")
+        with st.container():
+            st.markdown('<div class="card">', unsafe_allow_html=True)
+            st.markdown('<div class="section-header"><span class="section-icon">⬇️</span> Download Results</div>', unsafe_allow_html=True)
+            
+            results = st.session_state.extraction_results
+            export_bytes = results.get("export_bytes", b"")
+            export_format = results.get("export_format", "Excel")
+            
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            if export_format == "CSV":
+                index_filename = f"extraction_results_{timestamp}.csv"
+                index_mime = "text/csv"
+            else:
+                index_filename = f"extraction_results_{timestamp}.xlsx"
+                index_mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.download_button(
+                    label="📊 Download Index Sheet",
+                    data=export_bytes,
+                    file_name=index_filename,
+                    mime=index_mime,
+                    width="stretch"
+                )
+            
+            with col2:
+                json_data = json.dumps(results['responses'], indent=2)
+                st.download_button(
+                    label="📄 Download Raw JSON",
+                    data=json_data,
+                    file_name=f"extraction_raw_{timestamp}.json",
+                    mime="application/json",
+                    width="stretch"
+                )
+            
+            with col3:
+                error_log = "No errors detected during processing.\n"
+                st.download_button(
+                    label="📋 Download Error Log",
+                    data=error_log,
+                    file_name=f"error_log_{timestamp}.txt",
+                    mime="text/plain",
+                    width="stretch"
+                )
+            
+            with st.expander("🔍 View Detailed Extraction Logs"):
+                st.markdown("**Processing Timestamp:**")
+                st.code(results['timestamp'])
+                st.markdown("**Raw JSON Response:**")
+                st.json(results['responses'])
+                st.markdown("**Processing Statistics:**")
+                st.write(f"- Total Pages: {results['total_pages']}")
+                st.write(f"- Total Chunks: {results['num_chunks']}")
+                st.write(f"- Responses Received: {len(results['responses'])}")
+            
+            st.markdown('</div>', unsafe_allow_html=True)
+
+    @staticmethod
+    def render_data_viewer_section():
+        if not st.session_state.extraction_complete or not st.session_state.extraction_results:
+            return
+
+        with st.container():
+            st.markdown('<div class="card">', unsafe_allow_html=True)
+            st.markdown('<div class="section-header"><span class="section-icon">🔍</span> Data Viewer & Search</div>', unsafe_allow_html=True)
+            
+            results = st.session_state.extraction_results
+            responses = results.get("responses", [])
+            
+            if not responses:
+                st.warning("No data available to display.")
+                st.markdown('</div>', unsafe_allow_html=True)
+                return
+            
+            # Convert responses to DataFrame
+            df = pd.DataFrame(responses)
+            
+            # Add search controls
+            st.markdown("""
+                <p style="color: #5F6C7B; margin-bottom: 20px;">
+                    Use the search controls below to find and highlight specific records in your extracted data.
+                </p>
+            """, unsafe_allow_html=True)
+            
+            # Create two columns for search type and search input
+            col1, col2 = st.columns([1, 2])
+            
+            with col1:
+                search_type = st.selectbox(
+                    "Search By:",
+                    ["Bate Number", "Repair Order Number"],
+                    help="Select the field you want to search",
+                    key="search_type_selector"
+                )
+            
+            with col2:
+                if search_type == "Bate Number":
+                    placeholder_text = "Enter Bate Number (e.g., AARON0001302)"
+                    search_icon = "🏷️"
+                    column_to_search = "bate_number"
+                else:
+                    placeholder_text = "Enter Repair Order Number (e.g., 12345)"
+                    search_icon = "🔧"
+                    column_to_search = "repair_order_number"
+                
+                search_term = st.text_input(
+                    f"{search_icon} Search {search_type}:",
+                    placeholder=placeholder_text,
+                    help=f"Enter a {search_type} to highlight all matching rows",
+                    key="search_input",
+                    label_visibility="collapsed"
+                )
+            
+            st.markdown("<br>", unsafe_allow_html=True)
+            
+            # Display dataframe with highlighting (Exact match search)
+            if search_term and search_term.strip():
+                search_value = search_term.strip().upper()
+                
+                # Check if the column exists
+                if column_to_search in df.columns:
+                    # Create a mask for exact matching rows (case-insensitive)
+                    mask = df[column_to_search].astype(str).str.upper() == search_value
+                    
+                    matching_count = mask.sum()
+                    
+                    if matching_count > 0:
+                        # Show success message
+                        st.success(f"✅ Found {matching_count} row(s) matching '{search_term}'")
+                        
+                        # Apply styling to highlight matching rows
+                        def highlight_rows(row):
+                            row_value = str(row[column_to_search]).upper()
+                            
+                            if row_value == search_value:
+                                return ['background-color: #FFF3CD; font-weight: bold'] * len(row)
+                            return [''] * len(row)
+                        
+                        styled_df = df.style.apply(highlight_rows, axis=1)
+                        st.dataframe(styled_df, width="stretch", height=450)
+                        
+                    else:
+                        st.warning(f"⚠️ No rows found matching '{search_term}'")
+                        st.dataframe(df, width="stretch", height=450)
+                else:
+                    st.error(f"❌ Column '{column_to_search}' not found in the data.")
+                    st.dataframe(df, width="stretch", height=450)
+            else:
+                # Display full dataframe without highlighting
+                st.info(f"💡 Enter a {search_type} above to search and highlight matching rows.")
+                st.dataframe(df, width="stretch", height=450)
+            
+            # Display statistics
+            col_stat1, col_stat2, col_stat3 = st.columns(3)
+            
+            with col_stat1:
+                st.markdown(f"""
+                    <div style="padding: 12px; background: #DDEBFF; border-radius: 8px; text-align: center;">
+                        <div style="font-size: 0.85rem; color: #5F6C7B; margin-bottom: 4px;">Total Rows</div>
+                        <div style="font-size: 1.5rem; font-weight: 700; color: #1C2D4A;">{len(df)}</div>
+                    </div>
+                """, unsafe_allow_html=True)
+            
+            with col_stat2:
+                unique_bates = df['bate_number'].nunique() if 'bate_number' in df.columns else 0
+                st.markdown(f"""
+                    <div style="padding: 12px; background: #DAF5DB; border-radius: 8px; text-align: center;">
+                        <div style="font-size: 0.85rem; color: #5F6C7B; margin-bottom: 4px;">Unique Bates</div>
+                        <div style="font-size: 1.5rem; font-weight: 700; color: #1C2D4A;">{unique_bates}</div>
+                    </div>
+                """, unsafe_allow_html=True)
+            
+            with col_stat3:
+                unique_ros = df['repair_order_number'].nunique() if 'repair_order_number' in df.columns else 0
+                st.markdown(f"""
+                    <div style="padding: 12px; background: #FFF3CD; border-radius: 8px; text-align: center;">
+                        <div style="font-size: 0.85rem; color: #5F6C7B; margin-bottom: 4px;">Unique ROs</div>
+                        <div style="font-size: 1.5rem; font-weight: 700; color: #1C2D4A;">{unique_ros}</div>
+                    </div>
+                """, unsafe_allow_html=True)
+            
+            st.markdown('</div>', unsafe_allow_html=True)
+
+# ------------------- Processing Logic ------------------- #
+class DocumentProcessor:
+    def __init__(self, extraction_service, output_format):
+        self.extraction_service = extraction_service
+        self.output_format = output_format
+
+    def process_pdf(self, pdf_bytes):
+        try:
+            st.markdown('<div class="status-processing">🔄 Analyzing the document type</div>', unsafe_allow_html=True)
+            
+            extracted_res = self.extraction_service.is_text_based_pdf(pdf_bytes)
+            bate_dict, pages_with_issues = self.extraction_service.process_structured_ocr_pdf(extracted_res)
+            
+            if not bate_dict:
+                logging.error("Processing returned no response dictionary.")
+                st.error("❌ Processing failed. Please try again.", icon="❌")
+                return None
+
+            logging.info("Processing completed successfully.")
+            st.markdown('<div class="status-success">✅ Processing complete!</div>', unsafe_allow_html=True)
+
+            formatted_data, export_bytes = self.extraction_service.format_data_for_excel_or_csv(
+                bate_dict, self.output_format
+            )
+
+            total_pages = extracted_res.get("Total pages", 0)
+            st.session_state.extraction_results = {
+                "total_pages": total_pages,
+                "num_chunks": 1,
+                "responses": formatted_data,
+                "pages_with_issues": pages_with_issues,
+                "export_bytes": export_bytes,
+                "export_format": self.output_format,
+                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            }
+            st.session_state.extraction_complete = True
+            st.session_state.processing_stage = 4
+
+            return formatted_data
+
+        except Exception as e:
+            logging.error(f"Error processing PDF: {str(e)}", exc_info=True)
+            st.error(f"❌ Error processing PDF: {str(e)}", icon="❌")
             return None
 
-        logger.info("Processing completed successfully.")
-        st.markdown(
-            '<div class="status-success">✅ Processing complete!</div>',
-            unsafe_allow_html=True
-        )
+    def process_text(self, text_bytes, file_name):
+        try:
+            st.markdown('<div class="status-processing">🔄 Processing text file...</div>', unsafe_allow_html=True)
+            
+            # Decode text bytes to string
+            text_content = text_bytes.decode('utf-8')
 
-        # Formatting the data as per the Excel or CSV output
-        formatted_data, export_bytes = extraction_service.format_data_for_excel_or_csv(
-            bate_dict, output_format
-        )
+            # Calling the function to get all the repair order names
+            repair_orders = self.extraction_service.processing_txt_file(text_content)
+            if len(repair_orders) == 0:
+                logging.error("No repair orders found in the text file.")
+                st.error("❌ No repair orders found in the text file.", icon="❌")
+                return None
+            
+            # Extract Bates numbers from the document name
+            logging.info(f"Extracting the bate number from the file name {file_name}")
+            bate_numbers = self.extraction_service.extract_aaron_code(file_name, is_filename=True)
+            if len(bate_numbers) == 0:
+                logging.error(f"No Bates numbers found in the document name: {file_name}")
+                st.error("❌ No Bates numbers found in the document name.", icon="❌")
+                return None
+            logging.info(f"Text processing: Found {len(bate_numbers)} Bates numbers, {len(repair_orders)} repair orders")
+            st.markdown('<div class="status-success">✅ Processing complete!</div>', unsafe_allow_html=True)
 
-        # Build a results object compatible with the summary & download panels
-        total_pages = extracted_res.get("Total pages", 0)
-        responses = formatted_data  # list of row dicts
+            # Preparing the base dict where there will be single bate number and the repair order numbers and the page to be None
+            bate_dict = {1: {}}
+            bate_dict[1][bate_numbers[0]] = repair_orders
+            pages_with_issues = []
 
-        st.session_state.extraction_results = {
-            "total_pages": total_pages,
-            "num_chunks": 1,  # single-pass processing for now
-            "responses": responses,
-            "pages_with_issues": pages_with_issues,
-            "export_bytes": export_bytes,
-            "export_format": output_format,
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        }
-        st.session_state.extraction_complete = True
-        st.session_state.processing_stage = 4
+            # Format data for export
+            formatted_data, export_bytes = self.extraction_service.format_data_for_excel_or_csv(
+                bate_dict, self.output_format
+            )
 
-        return formatted_data
+            # Store results in session state
+            st.session_state.extraction_results = {
+                "total_pages": 1,  # Text files are treated as single page
+                "num_chunks": 1,
+                "responses": formatted_data,
+                "pages_with_issues": pages_with_issues,
+                "export_bytes": export_bytes,
+                "export_format": self.output_format,
+                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            }
+            st.session_state.extraction_complete = True
+            st.session_state.processing_stage = 4
 
-    except Exception as e:
-        logger.error(f"Error processing PDF: {str(e)}", exc_info=True)
-        st.error(f"❌ Error processing PDF: {str(e)}", icon="❌")
-        return None
+            return formatted_data
 
-# ------------------- Extraction Summary Section ------------------- #
-def render_extraction_summary():
-    if not st.session_state.extraction_complete or not st.session_state.extraction_results:
-        return
+        except Exception as e:
+            logging.error(f"Error processing text file: {str(e)}", exc_info=True)
+            st.error(f"❌ Error processing text file: {str(e)}", icon="❌")
+            return None
+
+# ------------------- Main Application ------------------- #
+def main():
+    # Initialization
+    logging.basicConfig(level=logging.INFO)
+    st.set_page_config(**AppConfig.PAGE_CONFIG)
     
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="section-header"><span class="section-icon">📊</span>Extraction Summary</div>',
-        unsafe_allow_html=True
-    )
+    UIComponents.inject_custom_css()
+    SessionManager.initialize()
     
-    results = st.session_state.extraction_results
-    responses = results.get("responses", [])
-
-    # Calculate metrics based on structured extraction results
-    total_pages = results.get("total_pages", 0)
-    num_chunks = results.get("num_chunks", 1)
-
-    # Count repair orders (non-empty repair_order_number values)
-    repair_orders_found = sum(
-        1 for row in responses
-        if str(row.get("repair_order_number", "")).strip()
-    )
-
-    # Count unique Bates Numbers
-    bates_numbers = {
-        row.get("bate_number")
-        for row in responses
-        if row.get("bate_number")
-    }
-    bates_found = len(bates_numbers)
-
-    # Errors = pages where Bates numbers were missing/ambiguous
-    errors_detected = len(results.get("pages_with_issues", []))
-
-    # Estimated accuracy: based on alignment between total pages and Bates Numbers
-    # If every page has exactly one Bates Number, accuracy = 100%.
-    if total_pages > 0:
-        missing_or_extra = abs(total_pages - bates_found)
-        accuracy = max(0.0, 100.0 * (1.0 - missing_or_extra / total_pages))
-    else:
-        accuracy = 0.0
+    # Service initialization
+    pdf_service = ServiceManager.init_service(PdfProcessor, "PdfProcessor")
+    llm_service = ServiceManager.init_service(LLMService, "LLMService")
+    extraction_service = ServiceManager.init_service(DocumentExtractor, "DocumentExtractor")
     
-    # Display metrics in 2 rows
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("📄 Total Pages Processed", f"{total_pages:,}")
-    with col2:
-        st.metric("🔧 Repair Orders Extracted", f"{repair_orders_found:,}")
-    with col3:
-        st.metric("📋 Bates Numbers Found", f"{bates_found:,}")
+    # Sidebar configuration
+    output_format = SectionRenderer.config_sidebar()
     
-    col4, col5, col6 = st.columns(3)
-    with col4:
-        st.metric("⚠️ Errors Detected", f"{errors_detected}")
-    with col5:
-        st.metric("✅ Estimated Accuracy", f"{accuracy}%")
-    with col6:
-        st.metric("📦 Chunks Processed", f"{num_chunks}")
+    # Main UI
+    UIComponents.render_header()
+    UIComponents.render_step_indicator(st.session_state.processing_stage)
     
-    st.markdown('</div>', unsafe_allow_html=True)
-
-# ------------------- Download Section ------------------- #
-def render_download_section():
-    if not st.session_state.extraction_complete or not st.session_state.extraction_results:
-        return
+    # Upload section
+    document_uploaded = SectionRenderer.render_upload_section()
     
-    st.markdown('<div class="card">', unsafe_allow_html=True)
-    st.markdown(
-        '<div class="section-header"><span class="section-icon">⬇️</span>Download Results</div>',
-        unsafe_allow_html=True
-    )
-    
-    results = st.session_state.extraction_results
-    responses = results.get("responses", [])
-    export_bytes = results.get("export_bytes", b"")
-    export_format = results.get("export_format", "Excel")
-
-    # Choose filename and mime based on export format
-    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    if export_bytes and export_format == "CSV":
-        index_filename = f"extraction_results_{timestamp}.csv"
-        index_mime = "text/csv"
-    else:
-        index_filename = f"extraction_results_{timestamp}.xlsx"
-        index_mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.download_button(
-            label="📊 Download Index Sheet",
-            data=export_bytes,
-            file_name=index_filename,
-            mime=index_mime,
-            use_container_width=True
-        )
-    
-    with col2:
-        # Generate JSON download
-        json_data = json.dumps(results['responses'], indent=2)
-        st.download_button(
-            label="📄 Download Raw JSON",
-            data=json_data,
-            file_name=f"extraction_raw_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-            mime="application/json",
-            use_container_width=True
-        )
-    
-    with col3:
-        # Generate Error Log (placeholder)
-        error_log = "No errors detected during processing.\n"
-        st.download_button(
-            label="📋 Download Error Log",
-            data=error_log,
-            file_name=f"error_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt",
-            mime="text/plain",
-            use_container_width=True
-        )
-    
-    # Detailed logs expander
-    with st.expander("🔍 View Detailed Extraction Logs"):
-        st.markdown("**Processing Timestamp:**")
-        st.code(results['timestamp'])
+    # Processing section
+    if document_uploaded:
+        st.session_state.processing_stage = max(st.session_state.processing_stage, 1)
         
-        st.markdown("**Raw JSON Response:**")
-        st.json(results['responses'])
+        process_clicked = SectionRenderer.render_processing_section()
         
-        st.markdown("**Processing Statistics:**")
-        st.write(f"- Total Pages: {results['total_pages']}")
-        st.write(f"- Total Chunks: {results['num_chunks']}")
-        st.write(f"- Responses Received: {len(results['responses'])}")
+        if process_clicked and 'document_bytes' in st.session_state and st.session_state.document_bytes:
+            logging.info("User pressed process button. Starting processing pipeline...")
+            st.session_state.processing_stage = 2
+            
+            # Determine document type and process accordingly
+            document_type = st.session_state.get('document_type')
+            document_bytes = st.session_state.document_bytes
+            
+            processor = DocumentProcessor(extraction_service, output_format)
+            
+            # Process based on document type
+            if document_type == AppConfig.DOCUMENT_TYPES["PDF"]:
+                formatted_data = processor.process_pdf(document_bytes)
+            elif document_type == AppConfig.DOCUMENT_TYPES["TEXT"]:
+                document_filename = st.session_state.get('document_filename', '')
+                formatted_data = processor.process_text(document_bytes, document_filename)
+            else:
+                st.error("❌ Unknown document type. Please select a valid document type.")
+                formatted_data = None
+            
+            if formatted_data:
+                logging.info("Successfully processed document.")
     
-    st.markdown('</div>', unsafe_allow_html=True)
-
-# ------------------- Footer ------------------- #
-def render_footer():
-    st.markdown(
-        """
-        <div class="footer">
-            Built for Litigation Workflows — OCR + Bates Indexing Automation<br>
-            Powered by Streamlit • PyMuPDF • OpenAI GPT-4
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-# ------------------- Main Application Flow ------------------- #
-render_header()
-render_step_indicator(st.session_state.processing_stage)
-
-# Upload Section
-pdf_uploaded = render_upload_section()
-
-# Processing Section
-if pdf_uploaded:
-    st.session_state.processing_stage = max(st.session_state.processing_stage, 1)
+    # Results sections
+    if st.session_state.extraction_complete:
+        SectionRenderer.render_extraction_summary()
+        SectionRenderer.render_download_section()
+        SectionRenderer.render_data_viewer_section()
     
-    process_clicked = render_processing_section()
-    
-    if process_clicked and 'pdf_bytes' in st.session_state:
-        logger.info("User pressed process button. Starting OCR pipeline...")
-        st.session_state.processing_stage = 2
-        
-        formatted_data = process_pdf(st.session_state.pdf_bytes)
-        
-        if formatted_data:
-            logger.info(f"Successfully processed document.")
-            st.balloons()
+    # Footer
+    UIComponents.render_footer()
 
-# Results Sections
-if st.session_state.extraction_complete:
-    render_extraction_summary()
-    render_download_section()
-
-# Footer
-render_footer()
-
-logger.info("App ready. UI rendered.")
+if __name__ == "__main__":
+    main()

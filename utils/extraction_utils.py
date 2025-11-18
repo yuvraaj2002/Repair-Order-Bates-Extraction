@@ -10,25 +10,47 @@ from openpyxl import Workbook
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-class PDFTextExtractor:
+class DocumentExtractor:
     def __init__(self):
         # Precompile regex patterns for efficiency
         self.aaron_code_pattern = re.compile(r"\bAARON\d{8,}\b")
         self.ro_pattern_structured_ocr_pdf = re.compile(r"\b\d{5}\b")
     
-    def extract_aaron_code(self, text: str) -> List[str]:
+    def extract_aaron_code(self, text: str, is_filename: bool = False) -> List[str]:
         """
-        Extract Bate codes in the format AARON followed by 8 or more digits.
+        Extract AARON codes in the format AARON followed by digits.
+        Handles both text content and filenames.
 
         Args:
-            text (str): Input text to search.
+            text (str): Input text or filename to search.
+            is_filename (bool): If True, treats input as a filename and removes extension.
+                            Defaults to False.
 
         Returns:
-            List[str]: List of detected codes.
+            List[str]: List of detected AARON codes in uppercase.
+
+        Raises:
+            ValueError: If input is not a string.
         """
         if not isinstance(text, str):
-            raise ValueError("Input text must be a string.")
-        return self.aaron_code_pattern.findall(text)
+            raise ValueError("Input must be a string.")
+        
+        # If it's a filename, remove extension for cleaner matching
+        if is_filename:
+            text = text.rsplit('.', 1)[0] if '.' in text else text
+        
+        # Use the appropriate pattern based on context
+        if is_filename:
+            # More flexible pattern for filenames: AARON followed by 7 or more digits
+            pattern = re.compile(r"AARON\d{7,}", re.IGNORECASE)
+        else:
+            # Standard pattern for text content: AARON followed by 8 or more digits
+            pattern = self.aaron_code_pattern  # Assuming this is already defined in your class
+        
+        matches = pattern.findall(text)
+        
+        # Convert to uppercase for consistency
+        return [match.upper() for match in matches]
     
     def extract_repair_order_numbers_structred_ocr_pdf(self, text: str) -> List[str]:
         """
@@ -44,6 +66,37 @@ class PDFTextExtractor:
             raise ValueError("Input text must be a string.")
         return self.ro_pattern_structured_ocr_pdf.findall(text)
     
+    def processing_txt_file(self, text: str) -> List[int]:
+        """
+        Super robust version that handles:
+        - Any whitespace (spaces, tabs, newlines, Unicode spaces)
+        - Case insensitivity  
+        - Optional 'S' after FOW
+        - Exactly 5 consecutive digits
+        """
+        if not text or not isinstance(text, str):
+            return []
+        
+        # Remove ALL whitespace characters including Unicode - MORE AGGRESSIVE
+        # This pattern removes spaces, tabs, newlines, and common Unicode spaces
+        cleaned = re.sub(r'[\s\u200B\u00A0\u200C\u200D\u2060]+', '', text)
+        
+        # Convert to uppercase for case-insensitive matching
+        cleaned = cleaned.upper()
+        
+        # Pattern: FOW, optional S, then exactly 5 digits
+        pattern = r'FOWS?(\d{5})'
+        
+        matches = re.findall(pattern, cleaned)
+        
+        # Convert to integers, validate they're actually 5-digit numbers
+        results = []
+        for match in matches:
+            if match.isdigit() and len(match) == 5:
+                results.append(int(match))
+        
+        return results
+
     def process_structured_ocr_pdf(self, extracted_res: dict):
         """
         Process each page's text to extract Bate numbers and Repair Order numbers.
@@ -179,3 +232,12 @@ class PDFTextExtractor:
 # extracted_res = is_text_based_pdf(pdf_bytes)
 # extractor = PDFTextExtractor()
 # bate_dict, issue_pages = extractor.process_structured_ocr_pdf(extracted_res)
+
+# Text file path
+text_file_path = 'testing/AARON0001302.txt'
+with open(text_file_path, 'rb') as file:
+    text_bytes = file.read()
+    text = text_bytes.decode('utf-8')
+    extractor = DocumentExtractor()
+    results = extractor.processing_txt_file(text)
+    print(results)
