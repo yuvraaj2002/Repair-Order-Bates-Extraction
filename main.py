@@ -2,7 +2,9 @@ import streamlit as st
 import logging
 import json
 import pandas as pd
+import io
 from datetime import datetime
+from openpyxl import Workbook
 from utils.ocr_utils import PdfProcessor
 from utils.llm_utils import LLMService
 from utils.extraction_utils import DocumentExtractor
@@ -304,46 +306,23 @@ class SectionRenderer:
                     with col:
                         st.metric(label, value)
             
-            # Display pages with issues
+            # Display pages with issues summary
             st.markdown("<br>", unsafe_allow_html=True)
+            st.markdown("### ⚠️ Pages with Issues", unsafe_allow_html=True)
             if pages_with_issues:
-                st.markdown("### ⚠️ Pages with Issues")
-                st.markdown("""
-                    <p style="color: #5F6C7B; margin-bottom: 15px;">
-                        The following pages had issues during processing (no Bate number found or multiple Bate numbers detected):
-                    </p>
+                pages_list = sorted(pages_with_issues)
+                st.markdown(f"""
+                    <div style="padding: 15px; background: #FFF3CD; border-left: 4px solid #FFC107; border-radius: 6px; margin: 10px 0;">
+                        <strong>Total pages with issues: {len(pages_list)}</strong><br>
+                        <small style="color: #5F6C7B;">Pages with no Bate number found or multiple Bate numbers detected. See Download Results section for full list.</small>
+                    </div>
                 """, unsafe_allow_html=True)
-                
-                # Display pages in a nice format
-                if len(pages_with_issues) <= 20:
-                    # Show all pages if 20 or fewer
-                    pages_str = ", ".join([f"Page {page}" for page in sorted(pages_with_issues)])
-                    st.markdown(f"""
-                        <div style="padding: 15px; background: #FFF3CD; border-left: 4px solid #FFC107; border-radius: 6px; margin: 10px 0;">
-                            <strong>Affected Pages:</strong> {pages_str}
-                        </div>
-                    """, unsafe_allow_html=True)
-                else:
-                    # Show first 20 and count for larger lists
-                    first_20 = sorted(pages_with_issues)[:20]
-                    pages_str = ", ".join([f"Page {page}" for page in first_20])
-                    st.markdown(f"""
-                        <div style="padding: 15px; background: #FFF3CD; border-left: 4px solid #FFC107; border-radius: 6px; margin: 10px 0;">
-                            <strong>Affected Pages (showing first 20 of {len(pages_with_issues)}):</strong> {pages_str}...
-                        </div>
-                    """, unsafe_allow_html=True)
-                    
-                    # Show full list in expander
-                    with st.expander(f"📋 View All {len(pages_with_issues)} Pages with Issues"):
-                        pages_list = sorted(pages_with_issues)
-                        # Display in columns for better readability
-                        num_cols = 5
-                        for i in range(0, len(pages_list), num_cols):
-                            cols = st.columns(num_cols)
-                            for j, col in enumerate(cols):
-                                if i + j < len(pages_list):
-                                    with col:
-                                        st.markdown(f"**Page {pages_list[i + j]}**")
+            else:
+                st.markdown("""
+                    <div style="padding: 15px; background: #DAF5DB; border-left: 4px solid #28a745; border-radius: 6px; margin: 10px 0;">
+                        <strong>✅ No Issues Detected:</strong> All pages were processed successfully with valid Bate numbers.
+                    </div>
+                """, unsafe_allow_html=True)
             
             st.markdown('</div>', unsafe_allow_html=True)
 
@@ -359,6 +338,7 @@ class SectionRenderer:
             results = st.session_state.extraction_results
             export_bytes = results.get("export_bytes", b"")
             export_format = results.get("export_format", "Excel")
+            pages_with_issues = results.get("pages_with_issues", [])
             
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             if export_format == "CSV":
@@ -380,59 +360,47 @@ class SectionRenderer:
                 )
             
             with col2:
-                json_data = json.dumps(results['responses'], indent=2)
-                st.download_button(
-                    label="📄 Download Raw JSON",
-                    data=json_data,
-                    file_name=f"extraction_raw_{timestamp}.json",
-                    mime="application/json",
-                    width="stretch"
-                )
-            
-            # Display pages with issues information
-            st.markdown("<br>", unsafe_allow_html=True)
-            pages_with_issues = results.get("pages_with_issues", [])
-            
-            with st.expander("⚠️ Pages with Issues", expanded=True):
                 if pages_with_issues:
-                    st.markdown("""
-                        <p style="color: #5F6C7B; margin-bottom: 15px;">
-                            The following pages had issues during processing (no Bate number found or multiple Bate numbers detected):
-                        </p>
-                    """, unsafe_allow_html=True)
-                    
-                    # Display pages in a nice format
-                    if len(pages_with_issues) <= 30:
-                        # Show all pages if 30 or fewer
-                        pages_list = sorted(pages_with_issues)
-                        # Display in columns for better readability
-                        num_cols = 5
-                        for i in range(0, len(pages_list), num_cols):
-                            cols = st.columns(num_cols)
-                            for j, col in enumerate(cols):
-                                if i + j < len(pages_list):
-                                    with col:
-                                        st.markdown(f"**Page {pages_list[i + j]}**")
+                    # Create pages with issues file
+                    pages_list = sorted(pages_with_issues)
+                    if export_format == "CSV":
+                        buffer = io.StringIO()
+                        buffer.write("Page Number\n")
+                        for page_num in pages_list:
+                            buffer.write(f"{page_num}\n")
+                        issues_bytes = buffer.getvalue().encode("utf-8")
+                        issues_filename = f"pages_with_issues_{timestamp}.csv"
+                        issues_mime = "text/csv"
                     else:
-                        # Show first 30 and count for larger lists
-                        pages_list = sorted(pages_with_issues)
-                        first_30 = pages_list[:30]
-                        num_cols = 5
-                        for i in range(0, len(first_30), num_cols):
-                            cols = st.columns(num_cols)
-                            for j, col in enumerate(cols):
-                                if i + j < len(first_30):
-                                    with col:
-                                        st.markdown(f"**Page {first_30[i + j]}**")
-                        
-                        st.markdown(f"<br><strong>... and {len(pages_list) - 30} more pages</strong>", unsafe_allow_html=True)
-                        st.markdown(f"<p style='color: #5F6C7B;'>Total pages with issues: {len(pages_list)}</p>", unsafe_allow_html=True)
+                        # Excel format
+                        wb = Workbook()
+                        ws = wb.active
+                        ws.title = "Pages with Issues"
+                        ws.append(["Page Number"])
+                        for page_num in pages_list:
+                            ws.append([page_num])
+                        bytes_buffer = io.BytesIO()
+                        wb.save(bytes_buffer)
+                        issues_bytes = bytes_buffer.getvalue()
+                        issues_filename = f"pages_with_issues_{timestamp}.xlsx"
+                        issues_mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    
+                    st.download_button(
+                        label="⚠️ Download Pages with Issues",
+                        data=issues_bytes,
+                        file_name=issues_filename,
+                        mime=issues_mime,
+                        width="stretch"
+                    )
                 else:
-                    st.markdown("""
-                        <div style="padding: 15px; background: #DAF5DB; border-left: 4px solid #28a745; border-radius: 6px; margin: 10px 0;">
-                            <strong>✅ No Issues Detected:</strong> All pages were processed successfully with valid Bate numbers.
-                        </div>
-                    """, unsafe_allow_html=True)
+                    json_data = json.dumps(results['responses'], indent=2)
+                    st.download_button(
+                        label="📄 Download Raw JSON",
+                        data=json_data,
+                        file_name=f"extraction_raw_{timestamp}.json",
+                        mime="application/json",
+                        width="stretch"
+                    )
             
             st.markdown('</div>', unsafe_allow_html=True)
 
@@ -584,7 +552,7 @@ class DocumentProcessor:
             st.markdown('<div class="status-success">✅ Processing complete!</div>', unsafe_allow_html=True)
 
             formatted_data, export_bytes = self.extraction_service.format_data_for_excel_or_csv(
-                bate_dict, self.output_format
+                bate_dict, self.output_format, pages_with_issues
             )
 
             total_pages = extracted_res.get("Total pages", 0)
@@ -638,7 +606,7 @@ class DocumentProcessor:
 
             # Format data for export
             formatted_data, export_bytes = self.extraction_service.format_data_for_excel_or_csv(
-                bate_dict, self.output_format
+                bate_dict, self.output_format, pages_with_issues
             )
 
             # Store results in session state

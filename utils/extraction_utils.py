@@ -148,13 +148,18 @@ class DocumentExtractor:
         self,
         data: Dict[int, Dict[str, List[str]]],
         output_format: str,
+        pages_with_issues: List[int] = None,
     ) -> Tuple[List[Dict[str, Any]], bytes]:
         """
         Format the data for Excel or CSV.
 
         For each repair order number on a page, create a separate row with the same page number and bate number.
         If there are no repair order numbers, generate a row with repair_order_number as empty.
+        For Excel format, also includes a separate sheet with pages that had issues.
         """
+        if pages_with_issues is None:
+            pages_with_issues = []
+            
         formatted_data_list: List[Dict[str, Any]] = []
 
         # First build a normalized list of row dicts
@@ -212,6 +217,14 @@ class DocumentExtractor:
                         row.get("page_number", ""),
                     ]
                 )
+            
+            # Add a second sheet for pages with issues if there are any
+            if pages_with_issues:
+                ws_issues = wb.create_sheet(title="Pages with Issues")
+                ws_issues.append(["Page Number"])
+                for page_num in sorted(pages_with_issues):
+                    ws_issues.append([page_num])
+            
             bytes_buffer = io.BytesIO()
             wb.save(bytes_buffer)
             export_bytes = bytes_buffer.getvalue()

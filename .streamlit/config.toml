@@ -5,4 +5,10 @@ backgroundColor = "#FFFFFF"
 secondaryBackgroundColor = "#F8F9FA"
 textColor = "#1C2D4A"
 
+# For very large files (up to 2GB)
+[server]
+maxUploadSize = 2000  # 2GB
+maxMessageSize = 2000  # 2GB
+enableCORS = false
+
 
