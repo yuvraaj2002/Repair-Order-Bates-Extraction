@@ -344,12 +344,6 @@ class SectionRenderer:
                                 if i + j < len(pages_list):
                                     with col:
                                         st.markdown(f"**Page {pages_list[i + j]}**")
-            else:
-                st.markdown("""
-                    <div style="padding: 15px; background: #DAF5DB; border-left: 4px solid #28a745; border-radius: 6px; margin: 10px 0;">
-                        <strong>✅ No Issues Detected:</strong> All pages were processed successfully with valid Bate numbers.
-                    </div>
-                """, unsafe_allow_html=True)
             
             st.markdown('</div>', unsafe_allow_html=True)
 
