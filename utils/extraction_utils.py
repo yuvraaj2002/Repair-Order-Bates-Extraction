@@ -125,6 +125,13 @@ class DocumentExtractor:
 
                 # Extract the Repair Order Number(s)
                 repair_order_numbers = self.extract_repair_order_numbers_structured_ocr_pdf(text)
+                if len(repair_order_numbers) == 0:
+                    pages_with_issues.append(page_num)
+                    logger.warning(
+                        f"Page {page_num} has no Repair Order numbers"
+                    )
+                    # Moving on with the next page
+                    continue
                 
                 # Adding the Bate number and the repair order numbers to the dictionary for the current page
                 bate_dict[page_num] = {}
