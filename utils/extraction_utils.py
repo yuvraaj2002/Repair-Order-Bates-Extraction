@@ -52,19 +52,22 @@ class DocumentExtractor:
         # Convert to uppercase for consistency
         return [match.upper() for match in matches]
     
-    def extract_repair_order_numbers_structred_ocr_pdf(self, text: str) -> List[str]:
+    def extract_repair_order_numbers_structured_ocr_pdf(self, text: str) -> List[str]:
         """
-        Extract all 5-digit repair order numbers (standalone numbers).
+        Extract all 5-digit or 6-digit repair order numbers (standalone numbers).
 
         Args:
             text (str): Input text to search.
 
         Returns:
-            List[str]: List of 5-digit numbers as strings.
+            List[str]: List of 5-digit or 6-digit numbers as strings.
         """
         if not isinstance(text, str):
             raise ValueError("Input text must be a string.")
-        return self.ro_pattern_structured_ocr_pdf.findall(text)
+        
+        # Updated pattern to match 5-digit OR 6-digit numbers
+        ro_pattern = r'\b\d{5,6}\b'
+        return re.findall(ro_pattern, text)
     
     def processing_txt_file(self, text: str) -> List[int]:
         """
@@ -117,20 +120,20 @@ class DocumentExtractor:
                     logger.warning(
                         f"Page {page_num} has {'no' if len(bate_number_list)==0 else 'multiple'} Bate numbers: {bate_number_list}"
                     )
+                    # Moving on with the next page
+                    continue
 
                 # Extract the Repair Order Number(s)
-                repair_order_numbers = self.extract_repair_order_numbers_structred_ocr_pdf(text)
+                repair_order_numbers = self.extract_repair_order_numbers_structured_ocr_pdf(text)
                 
-                # Add to dictionary only if Bate number is found
+                # Adding the Bate number and the repair order numbers to the dictionary for the current page
                 bate_dict[page_num] = {}
-                if bate_number_list:
-                    bate_dict[page_num][bate_number_list[0]] = repair_order_numbers
-                else:
-                    # Optionally store None or an empty string if no Bate number found
-                    bate_dict[page_num][None] = repair_order_numbers
+                bate_dict[page_num][bate_number_list[0]] = repair_order_numbers
             except Exception as e:
                 logger.error(f"Error processing page {page_num}: {e}")
                 pages_with_issues.append(page_num)
+                # Moving on with the next page
+                continue
 
         return bate_dict, pages_with_issues
 

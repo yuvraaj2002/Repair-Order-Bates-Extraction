@@ -58,7 +58,7 @@ class UIComponents:
         <style>
                 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
                 * { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
-                .block-container { padding-top: 2rem; padding-bottom: 3rem; max-width: 1200px; }
+                .block-container { padding-top: 2rem; padding-bottom: 3rem; max-width: none; width: min(96%, 1600px); margin: 0 auto; }
                 .card { background: #ffffff; padding: 30px; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.06); margin-bottom: 25px; border: 1px solid #e8eaed; }
                 .main-header { text-align: center; padding: 30px 0 20px 0; margin-bottom: 35px; }
                 .main-title { font-size: 2.5rem; font-weight: 700; color: #1C2D4A; margin-bottom: 10px; letter-spacing: -0.5px; }
@@ -74,7 +74,7 @@ class UIComponents:
                 .success-badge { background: #DAF5DB; color: #1e7e34; }
                 .info-badge { background: #DDEBFF; color: #004085; }
                 .file-badge { background: #DDEBFF; color: #004085; }
-                .section-header { font-size: 1.4rem; font-weight: 600; color: #1C2D4A; margin-bottom: 15px; display: flex; align-items: center; }
+                .section-header { font-size: 2.2rem; font-weight: 700; color: #1C2D4A; margin-bottom: 20px; display: flex; align-items: center; }
                 .stButton > button { background: linear-gradient(135deg, #1C2D4A 0%, #2d4a6e 100%); color: white; border: none; padding: 15px 30px; font-size: 1.05rem; font-weight: 600; border-radius: 10px; transition: all 0.3s ease; }
                 .status-processing { padding: 15px; background: #FFF3CD; border-left: 4px solid #FFC107; border-radius: 6px; margin: 10px 0; font-weight: 500; }
                 .status-success { padding: 15px; background: #DAF5DB; border-left: 4px solid #28a745; border-radius: 6px; margin: 10px 0; font-weight: 500; }
@@ -144,23 +144,38 @@ class SectionRenderer:
             st.markdown('<div class="card">', unsafe_allow_html=True)
             st.markdown('<div class="section-header"><span class="section-icon">📁</span>Document Upload</div>', unsafe_allow_html=True)
             
-            document_type = st.selectbox(
-                "Select Document Type:",
-                list(AppConfig.DOCUMENT_TYPES.values()),
-                index=0,
-                help="Select whether you're uploading a PDF file or a plain text file",
-                label_visibility="collapsed"
-            )
-            
-            st.session_state.document_type = document_type
-            
-            is_pdf = document_type == AppConfig.DOCUMENT_TYPES["PDF"]
-            accepted_types = ["pdf"] if is_pdf else ["txt"]
-            file_type_label = "PDF" if is_pdf else "Text"
-            recommendation = "✨ Recommended: Bates-stamped court-ready PDF documents" if is_pdf else "✨ Upload a plain text file (.txt) containing document content"
-            
-            st.markdown("<br>", unsafe_allow_html=True)
-            uploaded_file = st.file_uploader(f"Upload {file_type_label} File", type=accepted_types, help=recommendation, key="file_uploader")
+            content_col, help_col = st.columns([1.35, 0.65], gap="medium")
+            with content_col:
+                document_type = st.selectbox(
+                    "Select Document Type:",
+                    list(AppConfig.DOCUMENT_TYPES.values()),
+                    index=0,
+                    help="Select whether you're uploading a PDF file or a plain text file",
+                    label_visibility="collapsed"
+                )
+                
+                st.session_state.document_type = document_type
+                
+                is_pdf = document_type == AppConfig.DOCUMENT_TYPES["PDF"]
+                accepted_types = ["pdf"] if is_pdf else ["txt"]
+                file_type_label = "PDF" if is_pdf else "Text"
+                recommendation = "✨ Recommended: Bates-stamped court-ready PDF documents" if is_pdf else "✨ Upload a plain text file (.txt) containing document content"
+                
+                st.markdown("<br>", unsafe_allow_html=True)
+                uploaded_file = st.file_uploader(f"Upload {file_type_label} File", type=accepted_types, help=recommendation, key="file_uploader")
+                
+            with help_col:
+                st.markdown("""
+                    <div style="background: #F8FAFF; border: 1px solid #E1E7EF; border-radius: 10px; padding: 15px; height: 100%;">
+                        <p style="margin-bottom: 6px; font-weight: 600; color: #1C2D4A;">Upload Tips</p>
+                        <ul style="margin: 0; padding-left: 18px; color: #5F6C7B;">
+                            <li>Use a Bates-stamped PDF for optimal extraction.</li>
+                            <li>Ensure the document is landscape for consistent page numbers.</li>
+                            <li>Text uploads should be UTF-8 encoded and named with the Bates range.</li>
+                            <li>Select “CSV” if you plan to ingest into spreadsheets quickly.</li>
+                        </ul>
+                    </div>
+                """, unsafe_allow_html=True)
             
             if uploaded_file:
                 logging.info(f"File uploaded: {uploaded_file.name}, type: {file_type_label}")
@@ -201,7 +216,7 @@ class SectionRenderer:
     def render_processing_section():
         with st.container():
             st.markdown('<div class="card">', unsafe_allow_html=True)
-            st.markdown('<div class="section-header"><span class="section-icon">🚀</span>OCR Processing Engine</div>', unsafe_allow_html=True)
+            st.markdown('<div class="section-header"><span class="section-icon">🚀</span>Processing Engine</div>', unsafe_allow_html=True)
             
             st.markdown("""
                 <p style="color: #5F6C7B; margin-bottom: 20px;">
@@ -214,6 +229,50 @@ class SectionRenderer:
             process_clicked = st.button("🚀 Process Document", width="stretch", type="primary")
             st.markdown('</div>', unsafe_allow_html=True)
             return process_clicked
+
+    @staticmethod
+    def render_quick_tips_panel():
+        stage = st.session_state.get('processing_stage', 1)
+        stage_descriptions = {
+            1: "Waiting for your document",
+            2: "Identifying document type",
+            3: "Running the processing pipeline",
+            4: "Extraction complete — ready to export"
+        }
+        stage_label = stage_descriptions.get(stage, "Ready")
+        selected_type = st.session_state.get('document_type') or "Not selected yet"
+
+        with st.container():
+            st.markdown('<div class="card">', unsafe_allow_html=True)
+            st.markdown('<div class="section-header"><span class="section-icon">💡</span>Workflow Tips</div>', unsafe_allow_html=True)
+            st.markdown(f"""
+                <div style="padding: 12px; background: #F1F5FF; border-radius: 10px; border: 1px dashed #CDD7E5; margin-bottom: 12px;">
+                    <strong style="color: #1C2D4A;">Current Stage:</strong> {stage_label}<br>
+                    <small style="color: #5F6C7B;">Document Type: <strong>{selected_type}</strong></small>
+                </div>
+                <p style="color: #5F6C7B; margin-bottom: 12px;">Follow these quick reminders to maximize accuracy:</p>
+                <ul style="padding-left: 20px; color: #5F6C7B; margin-top: 0;">
+                    <li>PDFs are preferred for page-level OCR; keep scans straight and high contrast.</li>
+                    <li>Upload the entire Bates range so Repair Orders align with the right pages.</li>
+                    <li>Choose Excel when you need formulas preserved, CSV for lightweight sharing.</li>
+                    <li>Use the search panel below to verify specific Bates or Repair Order numbers before exporting.</li>
+                </ul>
+            """, unsafe_allow_html=True)
+
+            if st.session_state.extraction_complete:
+                st.markdown("""
+                    <div style="padding: 12px; background: #DAF5DB; border-left: 4px solid #28a745; border-radius: 8px; margin-top: 12px;">
+                        ✅ Extraction captured — move to the download panel to get your index.
+                    </div>
+                """, unsafe_allow_html=True)
+            else:
+                st.markdown("""
+                    <div style="padding: 12px; background: #FFF3CD; border-left: 4px solid #FFC107; border-radius: 8px; margin-top: 12px;">
+                        ⏳ Click “Process Document” when you’re ready. The system will auto-detect page types and start OCR work.
+                    </div>
+                """, unsafe_allow_html=True)
+
+            st.markdown('</div>', unsafe_allow_html=True)
 
     @staticmethod
     def render_extraction_summary():
@@ -231,16 +290,12 @@ class SectionRenderer:
             repair_orders_found = sum(1 for row in responses if str(row.get("repair_order_number", "")).strip())
             bates_numbers = {row.get("bate_number") for row in responses if row.get("bate_number")}
             bates_found = len(bates_numbers)
-            errors_detected = len(results.get("pages_with_issues", []))
-            accuracy = max(0.0, 100.0 * (1.0 - abs(total_pages - bates_found) / total_pages)) if total_pages > 0 else 0.0
+            pages_with_issues = results.get("pages_with_issues", [])
             
             metrics = [
                 ("📄 Total Pages Processed", f"{total_pages:,}"),
                 ("🔧 Repair Orders Extracted", f"{repair_orders_found:,}"),
-                ("📋 Bates Numbers Found", f"{bates_found:,}"),
-                ("⚠️ Errors Detected", f"{errors_detected}"),
-                ("✅ Estimated Accuracy", f"{accuracy}%"),
-                ("📦 Chunks Processed", f"{results.get('num_chunks', 1)}")
+                ("📋 Bates Numbers Found", f"{bates_found:,}")
             ]
             
             for i in range(0, len(metrics), 3):
@@ -248,6 +303,53 @@ class SectionRenderer:
                 for col, (label, value) in zip(cols, metrics[i:i+3]):
                     with col:
                         st.metric(label, value)
+            
+            # Display pages with issues
+            st.markdown("<br>", unsafe_allow_html=True)
+            if pages_with_issues:
+                st.markdown("### ⚠️ Pages with Issues")
+                st.markdown("""
+                    <p style="color: #5F6C7B; margin-bottom: 15px;">
+                        The following pages had issues during processing (no Bate number found or multiple Bate numbers detected):
+                    </p>
+                """, unsafe_allow_html=True)
+                
+                # Display pages in a nice format
+                if len(pages_with_issues) <= 20:
+                    # Show all pages if 20 or fewer
+                    pages_str = ", ".join([f"Page {page}" for page in sorted(pages_with_issues)])
+                    st.markdown(f"""
+                        <div style="padding: 15px; background: #FFF3CD; border-left: 4px solid #FFC107; border-radius: 6px; margin: 10px 0;">
+                            <strong>Affected Pages:</strong> {pages_str}
+                        </div>
+                    """, unsafe_allow_html=True)
+                else:
+                    # Show first 20 and count for larger lists
+                    first_20 = sorted(pages_with_issues)[:20]
+                    pages_str = ", ".join([f"Page {page}" for page in first_20])
+                    st.markdown(f"""
+                        <div style="padding: 15px; background: #FFF3CD; border-left: 4px solid #FFC107; border-radius: 6px; margin: 10px 0;">
+                            <strong>Affected Pages (showing first 20 of {len(pages_with_issues)}):</strong> {pages_str}...
+                        </div>
+                    """, unsafe_allow_html=True)
+                    
+                    # Show full list in expander
+                    with st.expander(f"📋 View All {len(pages_with_issues)} Pages with Issues"):
+                        pages_list = sorted(pages_with_issues)
+                        # Display in columns for better readability
+                        num_cols = 5
+                        for i in range(0, len(pages_list), num_cols):
+                            cols = st.columns(num_cols)
+                            for j, col in enumerate(cols):
+                                if i + j < len(pages_list):
+                                    with col:
+                                        st.markdown(f"**Page {pages_list[i + j]}**")
+            else:
+                st.markdown("""
+                    <div style="padding: 15px; background: #DAF5DB; border-left: 4px solid #28a745; border-radius: 6px; margin: 10px 0;">
+                        <strong>✅ No Issues Detected:</strong> All pages were processed successfully with valid Bate numbers.
+                    </div>
+                """, unsafe_allow_html=True)
             
             st.markdown('</div>', unsafe_allow_html=True)
 
@@ -272,7 +374,7 @@ class SectionRenderer:
                 index_filename = f"extraction_results_{timestamp}.xlsx"
                 index_mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             
-            col1, col2, col3 = st.columns(3)
+            col1, col2 = st.columns(2)
             
             with col1:
                 st.download_button(
@@ -293,25 +395,50 @@ class SectionRenderer:
                     width="stretch"
                 )
             
-            with col3:
-                error_log = "No errors detected during processing.\n"
-                st.download_button(
-                    label="📋 Download Error Log",
-                    data=error_log,
-                    file_name=f"error_log_{timestamp}.txt",
-                    mime="text/plain",
-                    width="stretch"
-                )
+            # Display pages with issues information
+            st.markdown("<br>", unsafe_allow_html=True)
+            pages_with_issues = results.get("pages_with_issues", [])
             
-            with st.expander("🔍 View Detailed Extraction Logs"):
-                st.markdown("**Processing Timestamp:**")
-                st.code(results['timestamp'])
-                st.markdown("**Raw JSON Response:**")
-                st.json(results['responses'])
-                st.markdown("**Processing Statistics:**")
-                st.write(f"- Total Pages: {results['total_pages']}")
-                st.write(f"- Total Chunks: {results['num_chunks']}")
-                st.write(f"- Responses Received: {len(results['responses'])}")
+            with st.expander("⚠️ Pages with Issues", expanded=True):
+                if pages_with_issues:
+                    st.markdown("""
+                        <p style="color: #5F6C7B; margin-bottom: 15px;">
+                            The following pages had issues during processing (no Bate number found or multiple Bate numbers detected):
+                        </p>
+                    """, unsafe_allow_html=True)
+                    
+                    # Display pages in a nice format
+                    if len(pages_with_issues) <= 30:
+                        # Show all pages if 30 or fewer
+                        pages_list = sorted(pages_with_issues)
+                        # Display in columns for better readability
+                        num_cols = 5
+                        for i in range(0, len(pages_list), num_cols):
+                            cols = st.columns(num_cols)
+                            for j, col in enumerate(cols):
+                                if i + j < len(pages_list):
+                                    with col:
+                                        st.markdown(f"**Page {pages_list[i + j]}**")
+                    else:
+                        # Show first 30 and count for larger lists
+                        pages_list = sorted(pages_with_issues)
+                        first_30 = pages_list[:30]
+                        num_cols = 5
+                        for i in range(0, len(first_30), num_cols):
+                            cols = st.columns(num_cols)
+                            for j, col in enumerate(cols):
+                                if i + j < len(first_30):
+                                    with col:
+                                        st.markdown(f"**Page {first_30[i + j]}**")
+                        
+                        st.markdown(f"<br><strong>... and {len(pages_list) - 30} more pages</strong>", unsafe_allow_html=True)
+                        st.markdown(f"<p style='color: #5F6C7B;'>Total pages with issues: {len(pages_list)}</p>", unsafe_allow_html=True)
+                else:
+                    st.markdown("""
+                        <div style="padding: 15px; background: #DAF5DB; border-left: 4px solid #28a745; border-radius: 6px; margin: 10px 0;">
+                            <strong>✅ No Issues Detected:</strong> All pages were processed successfully with valid Bate numbers.
+                        </div>
+                    """, unsafe_allow_html=True)
             
             st.markdown('</div>', unsafe_allow_html=True)
 
@@ -561,14 +688,19 @@ def main():
     UIComponents.render_header()
     UIComponents.render_step_indicator(st.session_state.processing_stage)
     
-    # Upload section
-    document_uploaded = SectionRenderer.render_upload_section()
-    
-    # Processing section
+    document_uploaded = False
+    process_clicked = False
+    with st.container():
+        left_col, right_col = st.columns([2.4, 1], gap="large")
+        with left_col:
+            document_uploaded = SectionRenderer.render_upload_section()
+            process_clicked = SectionRenderer.render_processing_section()
+        with right_col:
+            SectionRenderer.render_quick_tips_panel()
+
+    # Processing logic
     if document_uploaded:
         st.session_state.processing_stage = max(st.session_state.processing_stage, 1)
-        
-        process_clicked = SectionRenderer.render_processing_section()
         
         if process_clicked and 'document_bytes' in st.session_state and st.session_state.document_bytes:
             logging.info("User pressed process button. Starting processing pipeline...")
@@ -595,8 +727,13 @@ def main():
     
     # Results sections
     if st.session_state.extraction_complete:
-        SectionRenderer.render_extraction_summary()
-        SectionRenderer.render_download_section()
+        with st.container():
+            summary_col, download_col = st.columns([2.1, 1], gap="large")
+            with summary_col:
+                SectionRenderer.render_extraction_summary()
+            with download_col:
+                SectionRenderer.render_download_section()
+
         SectionRenderer.render_data_viewer_section()
     
     # Footer
