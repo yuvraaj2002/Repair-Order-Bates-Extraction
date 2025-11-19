@@ -244,10 +244,10 @@ class DocumentExtractor:
 # bate_dict, issue_pages = extractor.process_structured_ocr_pdf(extracted_res)
 
 # Text file path
-text_file_path = 'testing/AARON0001302.txt'
-with open(text_file_path, 'rb') as file:
-    text_bytes = file.read()
-    text = text_bytes.decode('utf-8')
-    extractor = DocumentExtractor()
-    results = extractor.processing_txt_file(text)
-    print(results)
+# text_file_path = 'testing/AARON0001302.txt'
+# with open(text_file_path, 'rb') as file:
+#     text_bytes = file.read()
+#     text = text_bytes.decode('utf-8')
+#     extractor = DocumentExtractor()
+#     results = extractor.processing_txt_file(text)
+#     print(results)
